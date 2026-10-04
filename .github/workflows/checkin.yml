@@ -30,11 +30,17 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@v4
 
+      # 关于 npm 缓存：
+      # setup-node 的 cache: 'npm' 需要仓库里存在 package-lock.json，
+      # 否则会直接报 "Dependencies lock file is not found" 并中断整个流程。
+      # 本仓库已附带 package-lock.json，理论上可以开启缓存；
+      # 但为了让「只上传了源码、没上传锁文件」的同学也能一次跑通，这里默认不开。
+      # 如果确认仓库里已有 package-lock.json，想加速可自行加回：cache: 'npm'
+      # （依赖只有 playwright 一个，影响很小）
       - name: 安装 Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
       - name: 安装依赖
         run: npm install
