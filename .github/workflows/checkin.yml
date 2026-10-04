@@ -4,10 +4,23 @@ name: 微博超话签到
 #   GitHub Actions 的 cron 用 UTC 时间。下面配置为每天 01:00 UTC 触发（= 北京时间 09:00）。
 #   触发后工作流内会再「随机等待 0~60 分钟」，实现时间窗随机化，降低机器特征。
 #   若要改时间：北京时间 = UTC + 8。例如想 08:00 执行 → cron 写 '0 0 * * *'（00:00 UTC）。
+#
+# 邮件通知：
+#   配置 SMTP_* 系列 Secrets 后，每次运行都会把「签到结果 + Cookie 倒计时」发到邮箱。
+#   没配 SMTP 也能正常签到，只是不发邮件（日志里照样打印倒计时表）。
 on:
   schedule:
     - cron: '0 1 * * *'      # 每天 01:00 UTC = 09:00 北京时间（触发点）
   workflow_dispatch:          # 支持手动触发（网页上点按钮即可测试）
+    inputs:
+      cookie_only:
+        description: '只做 Cookie 体检（不发签到请求，仅发体检邮件）'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
   checkin:
@@ -21,23 +34,42 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
       - name: 安装依赖
         run: npm install
 
+      # Cookie 体检模式不需要浏览器，直接跳过下载，省时间
       - name: 安装 Chromium（Playwright 浏览器）
+        if: ${{ github.event.inputs.cookie_only != 'true' }}
         run: npx playwright install --with-deps chromium
 
       # 随机窗口：在 0~60 分钟内随机等待，避免每天同一分钟执行
+      # （手动触发时不等待，方便调试；体检模式也不等待）
       - name: 随机等待（时间窗 0~60 分钟）
+        if: ${{ github.event_name == 'schedule' }}
         run: |
           WAIT=$((RANDOM % 3600))
           echo "随机等待 ${WAIT} 秒（约 $((WAIT / 60)) 分钟）后执行签到"
           sleep $WAIT
 
-      - name: 执行签到
+      - name: 执行签到（含 Cookie 到期检查与邮件通知）
         env:
           WEIBO_ACCOUNTS: ${{ secrets.WEIBO_ACCOUNTS }}
           WEIBO_KEYWORDS: ${{ secrets.WEIBO_KEYWORDS }}
           WEIBO_TOPIC_GAP_MS: '4000'
-        run: node index.js
+          # ---- 邮件通知（全部可选；不配置则自动跳过发信）----
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}          # 如 smtp.qq.com / smtp.163.com
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}          # 465(默认,SSL) 或 587
+          SMTP_USER: ${{ secrets.SMTP_USER }}          # 发件邮箱
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}          # 邮箱 SMTP 授权码（非登录密码！）
+          ALERT_TO: ${{ secrets.ALERT_TO }}            # 收件邮箱，多个用逗号分隔；留空=发给自己
+          MAIL_ALWAYS: ${{ secrets.MAIL_ALWAYS }}      # 填 0 = 仅异常/预警时发信；留空 = 每天都发
+          COOKIE_WARN_DAYS: ${{ secrets.COOKIE_WARN_DAYS }}  # 提前几天提醒，留空=7
+        run: |
+          if [ "${{ github.event.inputs.cookie_only }}" = "true" ]; then
+            echo "→ Cookie 体检模式"
+            node index.js --cookie-only
+          else
+            node index.js
+          fi
