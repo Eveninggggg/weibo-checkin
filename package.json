@@ -1,7 +1,7 @@
 {
   "name": "weibo-checkin-cloud",
-  "version": "1.0.0",
-  "description": "微博超话签到云端版（云函数 + Playwright 页面上下文）",
+  "version": "1.1.0",
+  "description": "微博超话签到云端版（Playwright 页面上下文）· 制作人：乐子人 · 仅供学习自用，不可用于盈利",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -12,5 +12,8 @@
   },
   "engines": {
     "node": ">=18"
-  }
+  },
+  "author": "乐子人",
+  "license": "UNLICENSED",
+  "private": true
 }
