@@ -1,0 +1,14 @@
+# 依赖
+node_modules/
+
+# 本地账号文件（含 Cookie，绝不提交！）
+accounts.json
+.env
+
+# 日志与产物
+*.log
+logs/
+
+# 系统文件
+.DS_Store
+Thumbs.db

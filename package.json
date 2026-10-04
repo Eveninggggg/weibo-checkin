@@ -1,0 +1,16 @@
+{
+  "name": "weibo-checkin-cloud",
+  "version": "1.0.0",
+  "description": "微博超话签到云端版（云函数 + Playwright 页面上下文）",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node index.js --once --dry-run"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
