@@ -17,3 +17,4 @@ Thumbs.db
 test/outbox/
 test/key.pem
 test/cert.pem
+test/testcerts/

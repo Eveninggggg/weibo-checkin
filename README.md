@@ -148,7 +148,12 @@ git push -u origin main
    - 看到 `✅ 签到成功` 说明完整链路通了
    - 看到 `[mail] ✅ 已发送：...` 说明邮件也通了
 
-> 💡 手动触发**不会**随机等待，点完立刻跑。只有每天定时触发才会等 0~60 分钟。
+> 💡 **关于「随机等待」这一步：**
+> - 手动触发时，等待上限取输入框 `max_wait_minutes`（**默认 1 分钟**），想快速验证填 `0` 即可。
+> - 每天定时触发时，等待上限是 **60 分钟**（可用 Secret `WEIBO_MAX_WAIT_MINUTES` 改小）。
+> - 勾了 `cookie_only = true` 时完全跳过等待。
+>
+> 也就是说：**手动跑得快是正常的**，这一步只在定时任务里才明显等待。想亲眼验证它有没有生效，手动触发时把 `max_wait_minutes` 填 `2`，日志里会打印实际等了多少秒。
 
 **想只体检 Cookie、不发签到请求？**
 
@@ -266,8 +271,35 @@ A：把发件人加进白名单/通讯录即可。个人邮箱直连 SMTP 发信
 **Q：`MAIL_ALWAYS=0` 是什么意思？**
 A：只在这些情况才发信——有账号 Cookie 失效、有 Cookie 进入提醒窗口、有超话签到失败。一切正常的日子不打扰你。
 
+**Q：Actions 页面出现 `Node.js 20 is deprecated ... actions/checkout@v4, actions/setup-node@v4` 警告？**
+A：这是**提示**不是错误，工作流会照常跑完（GitHub 会自动用 Node 24 代跑这些 action）。本项目已升级到 `actions/checkout@v5` + `actions/setup-node@v5`，拉最新版即可消除。
+> 注意：v5 的 setup-node 在 `package.json` 含 `packageManager` 字段时会自动开启缓存，可能重新触发「锁文件缺失」报错。本项目已显式写成 `package-manager-cache: false` 规避。
+
+**Q：Actions 提示 `The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026`？**
+A：纯告知性 notice，**不需要任何操作**。`ubuntu-latest` 标签届时会自动指向新系统，本项目的依赖（Node + Playwright）在新系统上同样可用。
+
+**Q：Actions 报错 `Error: Dependencies lock file is not found ... Supported file patterns: package-lock.json, npm-shrinkwrap.json, yarn.lock`？**
+A：这是 `actions/setup-node` 的 npm 缓存要求仓库里必须有 `package-lock.json` 导致的。两种解法任选其一：
+- **解法一（本项目已默认采用）**：不开启 npm 缓存。本仓库的 `checkin.yml` 已显式关闭（`package-manager-cache: false`），直接拉最新版即可。
+- **解法二（想启用缓存加速）**：确保仓库根目录有 `package-lock.json` 并一起提交。本项目已附带该文件，把它和其他文件一起上传到仓库，再把 `package-manager-cache` 改成 `true` 即可。
+
+> 注意：报错日志里同时出现的 `DeprecationWarning: The punycode module is deprecated` 是 Node 20 的无害提示，与失败无关，可以忽略。
+
+**Q：今天定时任务没自动跑 / 定时任务突然停了？**
+A：按这个顺序排查（第 1 条是绝大多数情况的根因）：
+
+1. **仓库 60 天无活动，定时被 GitHub 自动禁用了。** 打开 Actions → 点你的工作流 → 看页面顶部有没有黄色横幅（大意是 "disabled because there hasn't been activity in this repository for 60 days"）。**关键陷阱：定时任务自己运行不算"活动"，只有 commit/push 才算**，所以纯靠 cron 干活的仓库必然会在 60 天节点被关掉，而且**不发邮件、没有失败记录**。→ 点横幅旁的 **Enable workflow** 恢复。
+   **本项目的解法**：已内置 `.github/workflows/keepalive.yml`，每周自动提交一次空 commit 把计时器归零，**别删这个文件**。
+2. **cron 改动的提交者身份有问题。** 定时任务绑定在「最后一次修改 cron 行的提交者」身上。如果那次提交来自 bot / 工作流自身（用 `GITHUB_TOKEN` 提交），可能导致 schedule 不注册。→ 用你自己的账号手动小改一下 cron 行再提交。
+3. **定时本身是「尽力而为」，不保证准时。** 整点（`:00`）是全网最拥挤的时刻，延迟 5~20 分钟甚至被丢弃都可能。→ 本项目 cron 已改为 `7 1 * * *`（避开整点）。
+4. **排查命令**：在工作流页面 URL 后面加 `?query=event%3Aschedule`，或点运行列表的 Filter 选 `event: schedule`。**一条记录都没有 = schedule 从未注册**；有记录但失败 = 另一类问题。
+5. 其他：工作流文件必须在**默认分支**（main/master）上；fork 的仓库默认不跑定时，需在 Actions 页手动 Enable；`Settings → Actions → General` 里确认 Actions 没被禁用。
+
+**Q：手动触发很快，是不是没生效？**
+A：手动触发时随机等待上限默认只有 1 分钟（输入框 `max_wait_minutes`），所以快是正常的。只有定时触发才会等满 0~60 分钟。
+
 **Q：Actions 没自动运行？**
-A：GitHub 对长期无活动的仓库会暂停定时任务。进 Actions 页面点一次 **Enable** 即可；建议每月手动跑一次保持活跃。
+A：参见上面第 1 条——GitHub 对长期无活动的仓库会暂停定时任务。进 Actions 页面点一次 **Enable** 即可。
 
 **Q：能签多个账号吗？**
 A：可以，`WEIBO_ACCOUNTS` 是个数组，加多少个都行。
@@ -284,7 +316,9 @@ A：可以，`WEIBO_ACCOUNTS` 是个数组，加多少个都行。
 | `mailer.js` | 零依赖 SMTP 发信（Node 内置 `net`/`tls`，支持 465/587） |
 | `make-accounts.js` | 把账号原始文本转成 `WEIBO_ACCOUNTS` 用的 JSON |
 | `package.json` | 依赖声明 |
-| `.github/workflows/checkin.yml` | GitHub Actions 定时工作流 |
+| `package-lock.json` | 依赖版本锁定（启用 npm 缓存所需的锁文件） |
+| `.github/workflows/checkin.yml` | GitHub Actions 定时工作流（签到主流程） |
+| `.github/workflows/keepalive.yml` | 保活工作流：每周自动提交，防止定时任务被 GitHub 按「60 天无活动」规则禁用 |
 | `.gitignore` | 防止 Cookie 等敏感文件被提交 |
 
 ---
@@ -302,6 +336,7 @@ A：可以，`WEIBO_ACCOUNTS` 是个数组，加多少个都行。
 | `ALERT_TO` | ⭕ | 同 `SMTP_USER` | 收件邮箱，逗号分隔可多个 |
 | `MAIL_ALWAYS` | ⭕ | 每天都发 | 填 `0` = 仅异常/预警时发 |
 | `COOKIE_WARN_DAYS` | ⭕ | `7` | 提前几天开始提醒 |
+| `WEIBO_MAX_WAIT_MINUTES` | ⭕ | `60` | 定时任务随机等待上限（分钟），填 `0` = 不随机等待 |
 
 > 还有一个 `ALERT_FROM_NAME`（邮件里显示的发件人名字），默认「微博签到助手」，一般不用改。
 
