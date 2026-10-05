@@ -1,0 +1,55 @@
+name: 保活（防止定时任务被自动禁用）
+
+# ─────────────────────────────────────────────────────────────
+# 为什么要这个文件？
+#
+# GitHub 有一条静默规则：仓库「60 天无活动」时，会自动禁用所有定时工作流。
+# 而致命的是 —— 定时任务自己运行 **不算** 活动，只有 commit / push 才算。
+# 所以一个纯靠 cron 干活的仓库，必然在 60 天节点被关掉，且：
+#   · 不发邮件
+#   · 没有失败记录
+#   · 界面上只有一条很容易被忽略的横幅
+#
+# 这个工作流的作用：每周自动做一次空提交，把「活动」计时器归零，
+# 让主签到工作流永远不会被自动禁用。
+#
+# 想关掉的话，直接删掉本文件即可（代价是每 60 天要手动去 Actions 页面点一次 Enable）。
+# ─────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    # 每周一 00:00 UTC（= 北京时间周一 08:00）。
+    # 刻意避开整点前后的高峰，降低被延迟/丢弃的概率。
+    - cron: '17 3 * * 1'
+  workflow_dispatch:        # 支持手动触发一次
+
+permissions:
+  contents: write           # 提交需要写权限
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v5
+
+      - name: 更新保活时间戳并提交
+        run: |
+          set -e
+          mkdir -p .github
+          echo "上次保活：$(date -u '+%Y-%m-%d %H:%M:%S UTC')" > .github/keepalive.txt
+
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+          git add .github/keepalive.txt
+
+          if git diff --cached --quiet; then
+            echo "内容无变化，跳过提交"
+            exit 0
+          fi
+
+          # 用 [skip ci] 避免这次提交反过来触发其他工作流
+          git commit -m "chore: 保活提交（防止定时任务被 GitHub 自动禁用）[skip ci]"
+          git push
+          echo "✅ 保活完成，仓库活动计时器已归零"

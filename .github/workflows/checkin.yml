@@ -1,16 +1,24 @@
 name: 微博超话签到
 
 # 定时策略说明：
-#   GitHub Actions 的 cron 用 UTC 时间。下面配置为每天 01:00 UTC 触发（= 北京时间 09:00）。
+#   GitHub Actions 的 cron 用 UTC 时间。下面配置为每天 01:07 UTC 触发（= 北京时间 09:07）。
 #   触发后工作流内会再「随机等待 0~60 分钟」，实现时间窗随机化，降低机器特征。
-#   若要改时间：北京时间 = UTC + 8。例如想 08:00 执行 → cron 写 '0 0 * * *'（00:00 UTC）。
+#   若要改时间：北京时间 = UTC + 8。例如想 08:00 执行 → cron 写 '7 0 * * *'（00:07 UTC）。
+#
+#   ⚠️ 为什么分钟位写 7 而不是 0：
+#     GitHub 的 schedule 是「尽力而为」，不保证准时。整点（:00）是全网 cron 最拥挤的
+#     时刻，延迟 5~20 分钟甚至被直接丢弃的概率最高。错开几分钟能显著提高可靠性。
+#
+#   ⚠️ 重要：GitHub 会在「仓库 60 天无活动」时自动禁用定时工作流，且不通知。
+#     注意「定时任务自己运行」不算活动，只有 commit 才算。
+#     本项目用 .github/workflows/keepalive.yml 每周自动提交一次来规避，勿删该文件。
 #
 # 邮件通知：
 #   配置 SMTP_* 系列 Secrets 后，每次运行都会把「签到结果 + Cookie 倒计时」发到邮箱。
 #   没配 SMTP 也能正常签到，只是不发邮件（日志里照样打印倒计时表）。
 on:
   schedule:
-    - cron: '0 1 * * *'      # 每天 01:00 UTC = 09:00 北京时间（触发点）
+    - cron: '7 1 * * *'      # 每天 01:07 UTC = 09:07 北京时间（避开整点高峰）
   workflow_dispatch:          # 支持手动触发（网页上点按钮即可测试）
     inputs:
       cookie_only:
@@ -21,26 +29,35 @@ on:
         options:
           - 'false'
           - 'true'
+      max_wait_minutes:
+        description: '随机等待上限(分钟)。定时任务默认 60；手动测试时可填 1 快速验证'
+        required: false
+        default: '1'
+        type: string
 
 jobs:
   checkin:
     runs-on: ubuntu-latest
 
     steps:
+      # v5 起 actions/checkout 内部改用 Node 24，可消除 "Node.js 20 is deprecated" 警告
       - name: 拉取代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # 关于 npm 缓存：
-      # setup-node 的 cache: 'npm' 需要仓库里存在 package-lock.json，
-      # 否则会直接报 "Dependencies lock file is not found" 并中断整个流程。
-      # 本仓库已附带 package-lock.json，理论上可以开启缓存；
-      # 但为了让「只上传了源码、没上传锁文件」的同学也能一次跑通，这里默认不开。
-      # 如果确认仓库里已有 package-lock.json，想加速可自行加回：cache: 'npm'
-      # （依赖只有 playwright 一个，影响很小）
+      #   setup-node 的 cache: 'npm'（v5 里叫 package-manager-cache）需要仓库里存在
+      #   package-lock.json，否则会报 "Dependencies lock file is not found" 并中断流程。
+      #   本项目默认关闭缓存：依赖只有 playwright 一个，重复下载的耗时可以忽略，
+      #   但能保证「只上传了源码、没上传锁文件」的情况也能一次跑通。
+      #   若确认仓库根目录已有 package-lock.json，想加速可把下面改成 true。
+      #
+      # v5 相对 v4 的变化：package.json 里若有 packageManager 字段会「自动开启缓存」。
+      #   为避免重新踩锁文件的坑，这里显式设为 false。
       - name: 安装 Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
+          package-manager-cache: false
 
       - name: 安装依赖
         run: npm install
@@ -50,14 +67,42 @@ jobs:
         if: ${{ github.event.inputs.cookie_only != 'true' }}
         run: npx playwright install --with-deps chromium
 
-      # 随机窗口：在 0~60 分钟内随机等待，避免每天同一分钟执行
-      # （手动触发时不等待，方便调试；体检模式也不等待）
-      - name: 随机等待（时间窗 0~60 分钟）
-        if: ${{ github.event_name == 'schedule' }}
+      # 随机窗口：在 0~N 分钟内随机等待，避免每天同一分钟执行，降低机器特征。
+      #   · 定时触发：上限默认 60 分钟（可用 Secret WEIBO_MAX_WAIT_MINUTES 覆盖）
+      #   · 手动触发：上限取输入框 max_wait_minutes（默认 1 分钟，方便快速验证）
+      #   · 体检模式（cookie_only=true）：跳过等待
+      #
+      # 为什么要「随机」：固定同一秒执行容易被判定为脚本行为。
+      # 为什么上限不是越大越好：GitHub 单个 job 最长 6 小时，等待太久会挤压后续步骤。
+      - name: 随机等待（时间窗）
+        if: ${{ github.event.inputs.cookie_only != 'true' }}
+        id: randwait
         run: |
-          WAIT=$((RANDOM % 3600))
-          echo "随机等待 ${WAIT} 秒（约 $((WAIT / 60)) 分钟）后执行签到"
-          sleep $WAIT
+          # 决定上限（分钟）
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            MAX_MIN="${{ secrets.WEIBO_MAX_WAIT_MINUTES }}"
+            [ -z "$MAX_MIN" ] && MAX_MIN=60
+          else
+            MAX_MIN="${{ github.event.inputs.max_wait_minutes }}"
+            [ -z "$MAX_MIN" ] && MAX_MIN=1
+          fi
+
+          MAX_SEC=$((MAX_MIN * 60))
+          WAIT=$((RANDOM % (MAX_SEC + 1)))
+
+          echo "触发方式：${{ github.event_name }}　等待上限：${MAX_MIN} 分钟"
+          echo "本次随机等待 ${WAIT} 秒（约 $((WAIT / 60)) 分 $((WAIT % 60)) 秒）"
+          echo "wait_seconds=${WAIT}" >> "$GITHUB_OUTPUT"
+
+          if [ "$WAIT" -gt 0 ]; then
+            sleep "$WAIT"
+          fi
+          echo "✅ 等待结束，开始执行签到"
+
+      - name: 输出等待摘要
+        if: ${{ always() && steps.randwait.outputs.wait_seconds != '' }}
+        run: |
+          echo "本次随机等待：${{ steps.randwait.outputs.wait_seconds }} 秒"
 
       - name: 执行签到（含 Cookie 到期检查与邮件通知）
         env:
