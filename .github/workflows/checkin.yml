@@ -18,8 +18,21 @@ name: 微博超话签到
 #   没配 SMTP 也能正常签到，只是不发邮件（日志里照样打印倒计时表）。
 on:
   schedule:
-    - cron: '7 1 * * *'      # 每天 01:07 UTC = 09:07 北京时间（避开整点高峰）
-  workflow_dispatch:          # 支持手动触发（网页上点按钮即可测试）
+    # ⚠️ GitHub 的 schedule 是「尽力而为」，高负载时会延迟数小时甚至直接丢弃。
+    #    实测案例：保活任务计划 11:17 触发，实际 18:25 才跑（延迟 7 小时）。
+    #    因此这里一天设 3 个触发点做容错——脚本幂等（已签到的超话自动跳过），
+    #    且 MAIL_ALWAYS=0 时重复运行不会发多余邮件，多跑几次完全无害，
+    #    哪一次先被调度到，哪一次就完成当天的签到。
+    - cron: '7 1 * * *'      # 主：  北京 09:07
+    - cron: '23 2 * * *'     # 备1： 北京 10:23
+    - cron: '41 3 * * *'     # 备2： 北京 11:41
+
+  # 【外部定时触发】用 cron-job.org 等外部服务准点唤起本工作流，
+  # 彻底绕开 GitHub 自带调度器的延迟/丢单问题。详见《外部定时触发方案.md》。
+  repository_dispatch:
+    types: [checkin]          # 外部请求的 event_type 必须填 "checkin"
+
+  workflow_dispatch:          # 支持在 Actions 网页上手动触发
     inputs:
       cookie_only:
         description: '只做 Cookie 体检（不发签到请求，仅发体检邮件）'
@@ -30,9 +43,9 @@ on:
           - 'false'
           - 'true'
       max_wait_minutes:
-        description: '随机等待上限(分钟)。定时任务默认 60；手动测试时可填 1 快速验证'
+        description: '随机等待上限(分钟)。定时任务默认 15；手动测试时可填 0 快速验证'
         required: false
-        default: '1'
+        default: '0'
         type: string
 
 jobs:
@@ -73,18 +86,26 @@ jobs:
       #   · 体检模式（cookie_only=true）：跳过等待
       #
       # 为什么要「随机」：固定同一秒执行容易被判定为脚本行为。
-      # 为什么上限不是越大越好：GitHub 单个 job 最长 6 小时，等待太久会挤压后续步骤。
+      # 默认上限 15 分钟的理由：GitHub schedule 本身的调度延迟（几分钟到几小时）
+      # 已经提供了天然的时间随机性，没必要自己再等太久；
+      # 且私有仓库按分钟计费，sleep 时间也计费，窗口越小越省额度。
       - name: 随机等待（时间窗）
         if: ${{ github.event.inputs.cookie_only != 'true' }}
         id: randwait
         run: |
-          # 决定上限（分钟）
+          # 按触发来源决定等待上限（分钟）：
+          #   schedule            → 15（GitHub 调度延迟本身已有随机性）
+          #   repository_dispatch → 5（外部定时器很准时，留一点抖动即可）
+          #   workflow_dispatch   → 输入框值，默认 0（手动调试不等待）
           if [ "${{ github.event_name }}" = "schedule" ]; then
             MAX_MIN="${{ secrets.WEIBO_MAX_WAIT_MINUTES }}"
-            [ -z "$MAX_MIN" ] && MAX_MIN=60
+            [ -z "$MAX_MIN" ] && MAX_MIN=15
+          elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            MAX_MIN="${{ secrets.WEIBO_MAX_WAIT_MINUTES_EXTERNAL }}"
+            [ -z "$MAX_MIN" ] && MAX_MIN=5
           else
             MAX_MIN="${{ github.event.inputs.max_wait_minutes }}"
-            [ -z "$MAX_MIN" ] && MAX_MIN=1
+            [ -z "$MAX_MIN" ] && MAX_MIN=0
           fi
 
           MAX_SEC=$((MAX_MIN * 60))
