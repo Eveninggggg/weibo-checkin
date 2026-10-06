@@ -155,13 +155,21 @@ async function main() {
   const { checkinAccount } = loadCheckin();
 
   const topicGapMs = Number(process.env.WEIBO_TOPIC_GAP_MS || 4000);
+  // 账号间隔：避免 22 个账号在同一秒内连续签到（这是最明显的机器特征）。
+  //   · 单账号内部已有 4 秒超话间隔，但账号与账号之间原来是「零间隔接棒」；
+  //   · 默认 30 秒，跑完最后一个账号不等，省时间；
+  //   · 设 0 可关闭（例如本地调试）。
+  const accountGapMs = Number(process.env.WEIBO_ACCOUNT_GAP_MS || 30000);
 
   let totalNew = 0, totalFail = 0, totalAlready = 0;
   const failures = [];
   const expiredAccounts = [];
   const accountResults = [];
 
-  for (const acc of accounts) {
+  for (let i = 0; i < accounts.length; i++) {
+    const acc = accounts[i];
+    const isLast = i === accounts.length - 1;
+
     // 已过期的直接跳过（省时间，且必然失败）
     if (expiredNames.has(acc.name)) {
       log(`—— 账号「${acc.name}」跳过：Cookie 已过期（${age.rows.find(r => r.name === acc.name).expireAt}）`);
@@ -192,6 +200,14 @@ async function main() {
       fail: r.failedCheckin, uid: r.uid,
     });
     if (r.failedCheckin > 0) failures.push(`${acc.name}: ${r.failedCheckin} 个超话失败`);
+
+    // 账号间隔：等上一个账号跑完再开下一个，模拟真人逐个操作（最后一个不等）
+    if (accountGapMs > 0 && !isLast) {
+      const jitter = Math.floor(Math.random() * accountGapMs * 0.6); // 0~60% 额外抖动
+      const waitMs = accountGapMs + jitter;
+      log(`⏳ 账号间隔：等待 ${(waitMs / 1000).toFixed(1)} 秒后继续下一个账号…`);
+      await new Promise(res => setTimeout(res, waitMs));
+    }
   }
 
   log('================ 汇总 ================');
