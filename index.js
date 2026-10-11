@@ -172,7 +172,8 @@ async function main() {
 
     // 已过期的直接跳过（省时间，且必然失败）
     if (expiredNames.has(acc.name)) {
-      log(`—— 账号「${acc.name}」跳过：Cookie 已过期（${age.rows.find(r => r.name === acc.name).expireAt}）`);
+      const row = age.rows.find(r => r.name === acc.name);
+      log(`—— 账号「${acc.name}」跳过：Cookie 已过期（${(row && row.expireAt) || '未知'}）`);
       expiredAccounts.push(acc.name);
       failures.push(`${acc.name}: Cookie 已过期`);
       accountResults.push({ name: acc.name, status: 'expired', new: 0, already: 0, fail: 0, error: 'cookie_expired' });
