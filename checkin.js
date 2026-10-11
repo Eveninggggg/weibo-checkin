@@ -28,6 +28,16 @@ function parseCookies(cookieStr, domain = '.weibo.cn') {
     .filter(Boolean);
 }
 
+/** 安全转字符串并截断（JSON.stringify 可能因循环引用返回 undefined） */
+function safeStr(v, max) {
+  try {
+    const s = typeof v === 'string' ? v : JSON.stringify(v);
+    return String(s == null ? '' : s).slice(0, max || 200);
+  } catch (e) {
+    return String(v == null ? '' : v).slice(0, max || 200);
+  }
+}
+
 /** 关键词匹配（与插件一致：空=全部；支持 | 或 , 分隔的「或」组） */
 function matchKeyword(topicName, includeKeywords) {
   const list = (includeKeywords || []).map(s => String(s).trim()).filter(Boolean);
@@ -72,7 +82,11 @@ async function pageFetch(page, url) {
         headers: { 'Accept': 'application/json, text/plain, */*', 'X-Requested-With': 'XMLHttpRequest' },
         credentials: 'include',
       });
-      const text = await r.text();
+      // 注意：某些情况下（被风控拦截 / 连接被重置）响应体可能读不到，
+      // r.text() 会返回 undefined 甚至抛错，这里必须兜底，否则 .slice 会崩。
+      let text = '';
+      try { text = await r.text(); } catch (e) { text = ''; }
+      if (typeof text !== 'string') text = String(text == null ? '' : text);
       let data = null;
       try { data = JSON.parse(text); } catch (e) { data = null; }
       return { status: r.status, data, raw: text.slice(0, 300) };
@@ -121,7 +135,7 @@ async function checkinAccount(cookieStr, includeKeywords = [], opt = {}) {
     const info = cfg.data && cfg.data.data;
     if (!info || !info.login) {
       result.error = 'not_logged_in';
-      log(`登录态校验未通过（可能 Cookie 已失效）: ${JSON.stringify(cfg.data).slice(0, 160)}`);
+      log(`登录态校验未通过（可能 Cookie 已失效）: ${safeStr(cfg.data, 160)}`);
       return result;
     }
     result.uid = String(info.uid || '');
@@ -186,7 +200,7 @@ async function checkinAccount(cookieStr, includeKeywords = [], opt = {}) {
           result.failedCheckin += 1;
           const msg = (r.data && (r.data.msg || r.data.errno || r.data.ok)) || r.error || `HTTP ${r.status}`;
           result.topics.push({ name: t.name, level: t.level, action: '签到失败', reason: String(msg) });
-          log(`「${t.name}」❌ 签到失败: ${JSON.stringify(r.data || r).slice(0, 160)}`);
+          log(`「${t.name}」❌ 签到失败: ${safeStr(r.data || r, 160)}`);
         }
       }
       // 超话间隔（含随机抖动，降低机器特征）
