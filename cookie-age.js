@@ -13,6 +13,32 @@ function getField(cookieStr, name) {
 }
 
 /**
+ * 解析 ALF 字段为时间戳（秒）。
+ *
+ * 微博下发过两种形态：
+ *   1) 纯数字         1794313553
+ *   2) 带前缀         02_1794314021   （下划线前是版本/序号，后面才是时间戳）
+ * 早期版本只认纯数字，导致第 2 种被判成「无 ALF → 无法判断到期」，
+ * 明明还有 30 天却被列进「需重抓」名单。这里统一取最后一段数字。
+ *
+ * @returns {number|null} 时间戳（秒），解析不出返回 null
+ */
+function parseAlfTs(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return null;
+  // 纯数字直接用
+  if (/^\d+$/.test(s)) {
+    const n = Number(s);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  // 形如 02_1794314021 / 02-1794314021：取最后一段连续数字
+  const m = s.match(/(\d{9,})$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
  * 分析单个账号 Cookie 的时效。
  * @returns {{alf:number|null, sso:number|null, expireAt:string, loginAt:string, daysLeft:number|null, usedDays:number|null, level:string}}
  */
@@ -21,7 +47,7 @@ function analyzeCookie(cookieStr, nowSec) {
   const alfRaw = getField(cookieStr, 'ALF');
   const ssoRaw = getField(cookieStr, 'SSOLoginState');
 
-  const alf = /^\d+$/.test(alfRaw) ? Number(alfRaw) : null;
+  const alf = parseAlfTs(alfRaw);
   const sso = /^\d+$/.test(ssoRaw) ? Number(ssoRaw) : null;
 
   let daysLeft = null;
@@ -167,4 +193,4 @@ function escapeHtml(s) {
   })[c]);
 }
 
-module.exports = { analyzeCookie, analyzeAccounts, formatTable, formatHtmlTable, levelLabel, getField };
+module.exports = { analyzeCookie, analyzeAccounts, formatTable, formatHtmlTable, levelLabel, getField, parseAlfTs };
